@@ -3,17 +3,81 @@ title: "R TU Affordable Housing"
 output: html_notebook
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+## Assessing the Impact of Affordable Housing Development
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+In the last decade, Davidson County has experienced tremendous population growth. With this population growth has come skyrocketing housing costs. From 2010 to 2019, both home values and rents have grown by more than 150%, while wages increased only slowly. High housing costs can squeeze household budgets, reducing the money available for other daily needs, including food, clothing, health care, utilities, and transportation, as well as money needed for education or for future savings.
+
+One method of addressing rising housing costs is by building affordable housing developments. Despite the potential benefits, property owners who live near proposed housing developments often oppose such projects, citing fear that the developments will cause their property values to decline or will increase crime rates.
+
+In this project, you'll be examining the impact of housing units built in Davidson under the the Low Income Housing Tax Credit (LIHTC) or which were funded by the Barnes Housing Trust Fund (<https://www.nashville.gov/departments/mayor/housing/barnes-fund>). Established in 1986, the LIHTC program has become an integral component of federal housing policy, funding 21 percent of all multifamily developments over the period 1987-2008. The Barnes Fund, created in 2013, is Metro Nashville's first housing trust fund and was created to leverage affordable housing developments throughout Davidson County.
+
+You have been provided with several data sources. These data sources can be downloaded from here: <https://drive.google.com/drive/folders/1zWaLMIVQQuZXp4HHvtdeGpOZ5QYeWGPT?usp=share_link>
+
+-   filtered_sales.csv: This dataset was obtained from the Nashville Planning Department's Parcel Viewer (<https://maps.nashville.gov/ParcelViewer/>). It contains sales of single family homes from 1995 to the present day. It has been filtered to remove sales that are likely not arms-length transactions and transactions for parcels which did not have a house on them at the time of sale. This was done by removing any transations for \$0, any transactions for which the adjacent appraisal values showed \$0 for improvents, and any for which the transaction amount was less than half of the adjacent appraisals. If you would like to work with the full dataset, all transactions are contained in full_sales.csv and the assessment values are in assessment.csv.
+
+-   LIHTC.csv: Contains information on all Davidson County developments from the Department of Housing and Urban Development (HUD) National Low Income Housing Tax Credit Database. (For more information about the variables contained in this dataset, see the included data dictionary)
+
+- barnes.csv: Contains information on rental properties that are completed and have more than 10 units which were funded by the Barnes Fund.
+
+- property_details.csv: Contains detailed information on each property. Obtained from the Metro Nashville Assessor of Property's website (https://www.padctn.org). Includes year built, square footage, number of rooms, and location (lat/lng).
+
+For this project, we'll be focusing on single family homes and look at affordable housing developments that were placed in service in 2000 or later.
 
 ```{r}
-plot(cars)
+library(tidyverse)
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+Before delving into the project itself, I'll start with some exploratory data analysis.
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+```{r}
+filtered_sales <- read_csv('../data/filtered_sales.csv')
+```
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+Playing around with filtering and arranging (as well as referencing the website) I found out that:
+- NASHVILLE SENIOR CARE, LLC bought the most expensive property, for almost $50 million. it’s listed as “single family” which can be up to 4 units, owned or rented out, that doesn't seem to make much sense
+
+- there are 57 distinct transactions that went for the EXACT same price, $22058426
+
+With code below, changing the filter values:
+- there are 2147 unique sales values that appear at least 5 times
+
+- there are 1248 unique sales values that appear at least 10 times
+
+- there are 661 unique sales values that appear at least 30 times
+
+- there are 256 unique sales values that appear at least 100 times
+
+
+```{r}
+filtered_sales %>% 
+  distinct(apn, .keep_all= TRUE) %>% 
+  group_by(amount) %>% 
+  count() %>% 
+  #filter(n >= 100)
+  ggplot(aes(x=amount)) +
+  geom_histogram(binwidth=10000, na.rm=TRUE) +
+  xlim(0,1000000)
+```
+Interesting. I didn't quite expect that many transactions to be done at the exact same value down to the single $.
+
+First sale was made 1/1/1995, last one 10/27/2022. Most distinct sales happened in 1995, gradually going down, with an especially noticeable dip during the market crash.
+
+```{r}
+filtered_sales %>% 
+  distinct(apn, .keep_all= TRUE) %>% 
+  mutate(owneryear=format(ownerdate,'%Y')) %>% 
+  group_by(owneryear) %>% 
+  count() %>% 
+  ggplot(aes(y=owneryear, weight=n)) +
+  geom_bar()
+```
+```{r}
+filtered_sales %>% 
+  #distinct(apn, .keep_all= TRUE) %>% 
+  mutate(owneryear=format(ownerdate,'%Y')) %>% 
+  group_by(owneryear) %>% 
+  summarize(max_price = max(amount), min_price = min(amount)) %>% 
+  mutate(price_diff = max_price - min_price) %>% 
+  arrange(desc(price_diff))
+```
 
