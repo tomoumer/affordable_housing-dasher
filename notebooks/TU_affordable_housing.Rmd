@@ -17,38 +17,45 @@ You have been provided with several data sources. These data sources can be down
 
 -   LIHTC.csv: Contains information on all Davidson County developments from the Department of Housing and Urban Development (HUD) National Low Income Housing Tax Credit Database. (For more information about the variables contained in this dataset, see the included data dictionary)
 
-- barnes.csv: Contains information on rental properties that are completed and have more than 10 units which were funded by the Barnes Fund.
+-   barnes.csv: Contains information on rental properties that are completed and have more than 10 units which were funded by the Barnes Fund.
 
-- property_details.csv: Contains detailed information on each property. Obtained from the Metro Nashville Assessor of Property's website (https://www.padctn.org). Includes year built, square footage, number of rooms, and location (lat/lng).
+-   property_details.csv: Contains detailed information on each property. Obtained from the Metro Nashville Assessor of Property's website (<https://www.padctn.org>). Includes year built, square footage, number of rooms, and location (lat/lng).
 
 For this project, we'll be focusing on single family homes and look at affordable housing developments that were placed in service in 2000 or later.
 
 ```{r}
 library(tidyverse)
+library(httr)
+library(leaflet)
+library(sf)
+library(lubridate)
 ```
 
 Before delving into the project itself, I'll start with some exploratory data analysis.
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 filtered_sales <- read_csv('../data/filtered_sales.csv')
+lihtc <- read_csv('../data/LIHTC_updated.csv')
+barnes <- read_csv('../data/barnes.csv')
+property_details <- read_csv('../data/property_details.csv')
 ```
 
-Playing around with filtering and arranging (as well as referencing the website) I found out that:
-- NASHVILLE SENIOR CARE, LLC bought the most expensive property, for almost $50 million. it’s listed as “single family” which can be up to 4 units, owned or rented out, that doesn't seem to make much sense
+Playing around with filtering and arranging (as well as referencing the website) I found out that: - NASHVILLE SENIOR CARE, LLC bought the most expensive property, for almost \$50 million. it's listed as "single family" which can be up to 4 units, owned or rented out, that doesn't seem to make much sense
 
-- there are 57 distinct transactions that went for the EXACT same price, $22058426
+    filtered_sales %>% 
+      arrange(desc(amount))
 
-With code below, changing the filter values:
-- there are 2147 unique sales values that appear at least 5 times
+-   there are 57 distinct transactions that went for the EXACT same price, \$22058426
 
-- there are 1248 unique sales values that appear at least 10 times
+With code below, changing the filter values: - there are 2147 unique sales values that appear at least 5 times
 
-- there are 661 unique sales values that appear at least 30 times
+-   there are 1248 unique sales values that appear at least 10 times
 
-- there are 256 unique sales values that appear at least 100 times
+-   there are 661 unique sales values that appear at least 30 times
 
+-   there are 256 unique sales values that appear at least 100 times
 
-```{r}
+```
 filtered_sales %>% 
   distinct(apn, .keep_all= TRUE) %>% 
   group_by(amount) %>% 
@@ -58,11 +65,12 @@ filtered_sales %>%
   geom_histogram(binwidth=10000, na.rm=TRUE) +
   xlim(0,1000000)
 ```
-Interesting. I didn't quite expect that many transactions to be done at the exact same value down to the single $.
+
+Interesting. I didn't quite expect that many transactions to be done at the exact same value down to the single \$.
 
 First sale was made 1/1/1995, last one 10/27/2022. Most distinct sales happened in 1995, gradually going down, with an especially noticeable dip during the market crash.
 
-```{r}
+```
 filtered_sales %>% 
   distinct(apn, .keep_all= TRUE) %>% 
   mutate(owneryear=format(ownerdate,'%Y')) %>% 
@@ -71,7 +79,8 @@ filtered_sales %>%
   ggplot(aes(y=owneryear, weight=n)) +
   geom_bar()
 ```
-```{r}
+
+```
 filtered_sales %>% 
   #distinct(apn, .keep_all= TRUE) %>% 
   mutate(owneryear=format(ownerdate,'%Y')) %>% 
@@ -81,3 +90,159 @@ filtered_sales %>%
   arrange(desc(price_diff))
 ```
 
+Biggest price difference (between min and max sale) was in 2018, no surprise there. HHowever, it's interesting to me that the fourth biggest was in 2006.
+
+so 177 LIHTC projects, most of them placed in service in 1988 and 1989. There's 56 that were placed in service after (including) year 2000, not including the 2 placed in service unknown when and the 3 unconfirmed.
+
+```
+lihtc %>% 
+  filter(YR_PIS >= 2000) %>% 
+  group_by(YR_PIS) %>% 
+  count()
+```
+
+## Part 1: Statistical Analysis
+
+For the first part of this project, you'll mimic the methodology of the working paper "Does Federally Subsidized Rental Housing Depress Neighborhood Property Values?" (https://furmancenter.org/research/publication/does-federally-subsidized-rental-housing-depress-neighborhood-property), building a statistical model to explore the effect on sales price of a home being within a half mile of an affordable housing development. 
+
+> why 2000 ft??? in VA paper, it's 1/16 of a mile, 330 feet, paragonable to a city block; up to one mile (5280 ft)
+
+1.  Using the sf library, find the closest development to each home. Hint: You can convert a tibble to an sf object using the st_as_sf function (<https://r-spatial.github.io/sf/reference/st_as_sf.html>). See, for example, this stackoverflow post: <https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r>. Once converted, you can use the st_nearest_feature function (<https://r-spatial.github.io/sf/reference/st_nearest_feature.html>).
+
+> first of all, have to filter duplicate sales
+
+```{r}
+# by doing this, removed duplicate sales (same day, same APN), removed 7507 lines
+filtered_sales <- filtered_sales %>% 
+  distinct()
+```
+
+> note: by doing a full join and filter(is.na(amount)), found out that there are 33566 values that are present in property_details but we have no info on sales.
+
+```{r}
+property_sales_details <- filtered_sales %>%
+  left_join(property_details, by='apn')
+```
+
+```{r}
+
+#str_split(property_sales_details$centroid, ',', n=2, simplify=T)
+property_sales_details <- property_sales_details %>% 
+  mutate(longitude=str_extract(centroid, '-\\d*.\\d*'),
+         latitude=str_remove(str_extract(centroid, ',\\d*.\\d*'),',')
+         ) 
+```
+
+
+
+```{r}
+property_sales_details_sf <- property_sales_details %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, agr = "constant")
+
+lihtc_sf <- lihtc %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326, agr = "constant")
+```
+
+```{r}
+sales_and_HUD <- property_sales_details_sf %>% 
+  mutate(HUD_ID = lihtc_sf$HUD_ID[st_nearest_feature(property_sales_details_sf ,lihtc_sf)]) %>% 
+  left_join(lihtc, by='HUD_ID')
+```
+
+
+
+2.  Calculate the distance from each home its closest development.
+
+
+```{r}
+nearest_HUD <- lihtc_sf[st_nearest_feature(property_sales_details_sf, lihtc_sf), ]
+sales_and_HUD$nearest_HUD_dist <- st_distance(sales_and_HUD, nearest_HUD, by_element = T)
+
+```
+
+```{r}
+sales_and_HUD %>% 
+  head()
+```
+
+
+3.  Filter the homes down to those that are within one mile of an affordable housing development.
+
+```{r}
+# note: 1 mile = 1609.34 m
+# this filters it down to 140,148 values
+sales_and_HUD <- sales_and_HUD %>% 
+  filter(as.numeric(nearest_HUD_dist) <= 1609.34) 
+```
+
+```{r}
+length(unique(sales_and_HUD$apn))
+```
+
+
+4.  For each remaining home, calculate a new column called "group", which is defined according to the following rules. Hint: Use the case_when function to do this.
+
+-   "pre" - for homes where the distance is less than half a mile and whose sale date was 2-5 years prior to the input year
+-   "mid" - for homes where the distance is less than half a mile and whose sale date was 0-2 years prior to the input year
+-   "post" - for homes where the distance is less than half a mile and whose sale date was after the input year
+-   "outside" - for homes where the distance is more than half a mile and whose sale date was no more than 5 years prior to the input year
+-   "other" - All other rows
+
+> question: since it's year placed in service, we don't have months or weeks
+
+```{r}
+sales_and_HUD <- sales_and_HUD %>% 
+  mutate(group=case_when(
+    as.numeric(nearest_HUD_dist) < 804.67 &
+    YR_PIS-year(sales_and_HUD$ownerdate) >= 2 &
+    YR_PIS-year(sales_and_HUD$ownerdate) <=5 ~ 'pre',
+    as.numeric(nearest_HUD_dist) < 804.67 &
+    YR_PIS-year(sales_and_HUD$ownerdate) >= 0 &
+    YR_PIS-year(sales_and_HUD$ownerdate) <=2 ~ 'mid',
+    as.numeric(nearest_HUD_dist) < 804.67 &
+    YR_PIS-year(sales_and_HUD$ownerdate) < 0 ~ 'post',
+    as.numeric(nearest_HUD_dist) >= 804.67 &
+    YR_PIS-year(sales_and_HUD$ownerdate) < 5 ~ 'outside',
+    TRUE ~ 'other'
+  ))
+
+```
+
+
+5.  Filter out all rows whose group is "other".
+
+> from 140,148 to 109,295 rows
+
+```{r}
+sales_and_HUD %>% 
+  filter(group!='other')
+```
+
+
+6.  Add an id column containing the id value for the development.
+
+> already done that with the modifications I had to do earlier, the HUD_ID
+
+7.  Create a column "Tpost" that, for homes in the "post" group gives the number of years that the sale occurred after the housing development was placed in service.
+
+8.  Create a column named "age" which gives the age of the home at the time of sale.
+
+9.  Filter down to only sales that took place within the five years before or after the associated development was placed in service. Then build a linear model with target variable the sales amount using the following features:
+
+-   square_footage
+-   age of home at time of sale
+-   group
+-   year
+-   tract
+-   How can you interpret the coefficients of this model?
+
+10. Now, try a model with target being the log of the sale price.
+
+-   square_footage
+-   age of home at time of sale
+-   group
+-   year
+-   tract
+-   How can you interpret the coefficients of this model?
+
+11. Continue to explore the data to see if you can improve the models you have.
