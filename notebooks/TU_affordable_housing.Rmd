@@ -23,7 +23,7 @@ You have been provided with several data sources. These data sources can be down
 
 For this project, we'll be focusing on single family homes and look at affordable housing developments that were placed in service in 2000 or later.
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 library(tidyverse)
 library(httr)
 library(leaflet)
@@ -55,130 +55,116 @@ With code below, changing the filter values: - there are 2147 unique sales value
 
 -   there are 256 unique sales values that appear at least 100 times
 
+```{=html}
+<!-- -->
 ```
-filtered_sales %>% 
-  distinct(apn, .keep_all= TRUE) %>% 
-  group_by(amount) %>% 
-  count() %>% 
-  #filter(n >= 100)
-  ggplot(aes(x=amount)) +
-  geom_histogram(binwidth=10000, na.rm=TRUE) +
-  xlim(0,1000000)
-```
+    filtered_sales %>% 
+      distinct(apn, .keep_all= TRUE) %>% 
+      group_by(amount) %>% 
+      count() %>% 
+      #filter(n >= 100)
+      ggplot(aes(x=amount)) +
+      geom_histogram(binwidth=10000, na.rm=TRUE) +
+      xlim(0,1000000)
 
 Interesting. I didn't quite expect that many transactions to be done at the exact same value down to the single \$.
 
 First sale was made 1/1/1995, last one 10/27/2022. Most distinct sales happened in 1995, gradually going down, with an especially noticeable dip during the market crash.
 
-```
-filtered_sales %>% 
-  distinct(apn, .keep_all= TRUE) %>% 
-  mutate(owneryear=format(ownerdate,'%Y')) %>% 
-  group_by(owneryear) %>% 
-  count() %>% 
-  ggplot(aes(y=owneryear, weight=n)) +
-  geom_bar()
-```
+    filtered_sales %>% 
+      distinct(apn, .keep_all= TRUE) %>% 
+      mutate(owneryear=format(ownerdate,'%Y')) %>% 
+      group_by(owneryear) %>% 
+      count() %>% 
+      ggplot(aes(y=owneryear, weight=n)) +
+      geom_bar()
 
-```
-filtered_sales %>% 
-  #distinct(apn, .keep_all= TRUE) %>% 
-  mutate(owneryear=format(ownerdate,'%Y')) %>% 
-  group_by(owneryear) %>% 
-  summarize(max_price = max(amount), min_price = min(amount)) %>% 
-  mutate(price_diff = max_price - min_price) %>% 
-  arrange(desc(price_diff))
-```
+    filtered_sales %>% 
+      #distinct(apn, .keep_all= TRUE) %>% 
+      mutate(owneryear=format(ownerdate,'%Y')) %>% 
+      group_by(owneryear) %>% 
+      summarize(max_price = max(amount), min_price = min(amount)) %>% 
+      mutate(price_diff = max_price - min_price) %>% 
+      arrange(desc(price_diff))
 
 Biggest price difference (between min and max sale) was in 2018, no surprise there. HHowever, it's interesting to me that the fourth biggest was in 2006.
 
 so 177 LIHTC projects, most of them placed in service in 1988 and 1989. There's 56 that were placed in service after (including) year 2000, not including the 2 placed in service unknown when and the 3 unconfirmed.
 
-```
-lihtc %>% 
-  filter(YR_PIS >= 2000) %>% 
-  group_by(YR_PIS) %>% 
-  count()
-```
+    lihtc %>% 
+      filter(YR_PIS >= 2000) %>% 
+      group_by(YR_PIS) %>% 
+      count()
 
 ## Part 1: Statistical Analysis
 
-For the first part of this project, you'll mimic the methodology of the working paper "Does Federally Subsidized Rental Housing Depress Neighborhood Property Values?" (https://furmancenter.org/research/publication/does-federally-subsidized-rental-housing-depress-neighborhood-property), building a statistical model to explore the effect on sales price of a home being within a half mile of an affordable housing development. 
+For the first part of this project, you'll mimic the methodology of the working paper "Does Federally Subsidized Rental Housing Depress Neighborhood Property Values?" (<https://furmancenter.org/research/publication/does-federally-subsidized-rental-housing-depress-neighborhood-property>), building a statistical model to explore the effect on sales price of a home being within a half mile of an affordable housing development.
 
 > why 2000 ft??? in VA paper, it's 1/16 of a mile, 330 feet, paragonable to a city block; up to one mile (5280 ft)
 
 1.  Using the sf library, find the closest development to each home. Hint: You can convert a tibble to an sf object using the st_as_sf function (<https://r-spatial.github.io/sf/reference/st_as_sf.html>). See, for example, this stackoverflow post: <https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r>. Once converted, you can use the st_nearest_feature function (<https://r-spatial.github.io/sf/reference/st_nearest_feature.html>).
 
-> first of all, have to filter duplicate sales
+> first of all, have to filter duplicate sales by doing this, removed duplicate sales removed 7507 lines, coming to 311327 observations. Next, keep only the ones that have information in property_details (it appears all of them do). Additional note: by doing a full join and filter(is.na(amount)), found out that there are 33566 values that are present in property_details but we have no info on sales.
 
 ```{r}
-# by doing this, removed duplicate sales (same day, same APN), removed 7507 lines
-filtered_sales <- filtered_sales %>% 
-  distinct()
+property_sales_details <- filtered_sales %>% 
+  distinct() %>% 
+  inner_join(property_details, by='apn') %>% 
+  mutate(
+    longitude=str_extract(centroid, '-\\d*.\\d*'),
+    latitude=str_remove(str_extract(centroid, ',\\d*.\\d*'),',')
+  ) 
+
 ```
 
-> note: by doing a full join and filter(is.na(amount)), found out that there are 33566 values that are present in property_details but we have no info on sales.
+> Secondly, since we only want affordable housing since year 2000, filter out the dataset, going from 177 rows down to 57; but then we can add the barnes dataset to it, remove all not relevant columns for our analysis. Once that is done, there is a total of 66 rows
 
 ```{r}
-property_sales_details <- filtered_sales %>%
-  left_join(property_details, by='apn')
+barnes <- barnes %>% 
+  mutate(HUD_ID=c('TNA081023A00400CO',
+                  'TNA09211010400',
+                  'TNA081023A90000CO',
+                  'TNA08600035500',
+                  'TNA10613000800',
+                  'TNA05108017800',
+                  'TNA09311022700',
+                  'TNA06912006600',
+                  'TNA10601016800'),
+         .before = 'Barnes Year') %>% 
+  select(HUD_ID, YR_PIS='Barnes Year', LATITUDE= lat, LONGITUDE=lng)
+
+
+lihtc <- lihtc %>% 
+  filter(YR_PIS >= 2000 & !YR_PIS %in% c(8888, 9999)) %>% 
+  select(HUD_ID, YR_PIS, LATITUDE, LONGITUDE)
+
+total_HUD <- bind_rows(lihtc,barnes)
 ```
-
-```{r}
-
-#str_split(property_sales_details$centroid, ',', n=2, simplify=T)
-property_sales_details <- property_sales_details %>% 
-  mutate(longitude=str_extract(centroid, '-\\d*.\\d*'),
-         latitude=str_remove(str_extract(centroid, ',\\d*.\\d*'),',')
-         ) 
-```
-
 
 
 ```{r}
 property_sales_details_sf <- property_sales_details %>% 
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, agr = "constant")
 
-lihtc_sf <- lihtc %>% 
+total_HUD_sf <- total_HUD %>% 
   st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326, agr = "constant")
 ```
 
 ```{r}
 sales_and_HUD <- property_sales_details_sf %>% 
-  mutate(HUD_ID = lihtc_sf$HUD_ID[st_nearest_feature(property_sales_details_sf ,lihtc_sf)]) %>% 
-  left_join(lihtc, by='HUD_ID')
+  mutate(HUD_ID = total_HUD$HUD_ID[st_nearest_feature(property_sales_details_sf ,total_HUD_sf)]) %>% 
+  left_join(total_HUD, by='HUD_ID')
 ```
-
-
 
 2.  Calculate the distance from each home its closest development.
 
-
 ```{r}
-nearest_HUD <- lihtc_sf[st_nearest_feature(property_sales_details_sf, lihtc_sf), ]
+nearest_HUD <- total_HUD_sf[st_nearest_feature(property_sales_details_sf, total_HUD_sf), ]
 sales_and_HUD$nearest_HUD_dist <- st_distance(sales_and_HUD, nearest_HUD, by_element = T)
 
 ```
 
-```{r}
-sales_and_HUD %>% 
-  head()
-```
-
-
 3.  Filter the homes down to those that are within one mile of an affordable housing development.
-
-```{r}
-# note: 1 mile = 1609.34 m
-# this filters it down to 140,148 values
-sales_and_HUD <- sales_and_HUD %>% 
-  filter(as.numeric(nearest_HUD_dist) <= 1609.34) 
-```
-
-```{r}
-length(unique(sales_and_HUD$apn))
-```
-
 
 4.  For each remaining home, calculate a new column called "group", which is defined according to the following rules. Hint: Use the case_when function to do this.
 
@@ -188,36 +174,11 @@ length(unique(sales_and_HUD$apn))
 -   "outside" - for homes where the distance is more than half a mile and whose sale date was no more than 5 years prior to the input year
 -   "other" - All other rows
 
-> question: since it's year placed in service, we don't have months or weeks
-
-```{r}
-sales_and_HUD <- sales_and_HUD %>% 
-  mutate(group=case_when(
-    as.numeric(nearest_HUD_dist) < 804.67 &
-    YR_PIS-year(ownerdate) >= 2 &
-    YR_PIS-year(ownerdate) <=5 ~ 'pre',
-    as.numeric(nearest_HUD_dist) < 804.67 &
-    YR_PIS-year(ownerdate) >= 0 &
-    YR_PIS-year(ownerdate) <=2 ~ 'mid',
-    as.numeric(nearest_HUD_dist) < 804.67 &
-    YR_PIS-year(ownerdate) < 0 ~ 'post',
-    as.numeric(nearest_HUD_dist) >= 804.67 &
-    YR_PIS-year(ownerdate) < 5 ~ 'outside',
-    TRUE ~ 'other'
-  ))
-
-```
-
+> note: 1 mile = 1609.34 m - this filters it down to 112,085 values
 
 5.  Filter out all rows whose group is "other".
 
-> from 140,148 to 109,295 rows
-
-```{r}
-sales_and_HUD %>% 
-  filter(group!='other')
-```
-
+> down to 72,494 rows
 
 6.  Add an id column containing the id value for the development.
 
@@ -225,19 +186,26 @@ sales_and_HUD %>%
 
 7.  Create a column "Tpost" that, for homes in the "post" group gives the number of years that the sale occurred after the housing development was placed in service.
 
-```{r}
-sales_and_HUD <- sales_and_HUD %>% 
-  mutate(Tpost=if_else(group == 'post', year(ownerdate)-YR_PIS, as.numeric(NA), ) )
-```
-
-
 8.  Create a column named "age" which gives the age of the home at the time of sale.
 
 ```{r}
 sales_and_HUD <- sales_and_HUD %>% 
-  mutate(age=year(ownerdate)-year_built)
+  filter(as.numeric(nearest_HUD_dist) <= 1609.34) %>% 
+  mutate(group=case_when(
+    as.numeric(nearest_HUD_dist) < 804.67 &
+    (YR_PIS-year(ownerdate)) %in% 2:5 ~ 'pre',
+    as.numeric(nearest_HUD_dist) < 804.67 &
+    (YR_PIS-year(ownerdate)) %in% 0:2 ~ 'mid',
+    as.numeric(nearest_HUD_dist) < 804.67 &
+    (YR_PIS-year(ownerdate)) < 0 ~ 'post',
+    as.numeric(nearest_HUD_dist) >= 804.67 &
+    (YR_PIS-year(ownerdate)) <= 5 ~ 'outside',
+    TRUE ~ 'other'
+  )) %>% 
+  filter(group!='other') %>% 
+  mutate(Tpost=if_else(group == 'post', year(ownerdate)-YR_PIS, as.numeric(NA), ),
+         age=year(ownerdate)-year_built)
 ```
-
 
 9.  Filter down to only sales that took place within the five years before or after the associated development was placed in service. Then build a linear model with target variable the sales amount using the following features:
 
@@ -252,7 +220,6 @@ sales_and_HUD <- sales_and_HUD %>%
 sales_and_HUD
 ```
 
-
 ```{r}
 sales_and_HUD_lm <- sales_and_HUD %>% 
   filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
@@ -262,8 +229,7 @@ anova(sales_and_HUD_lm)
 summary(sales_and_HUD_lm)
 ```
 
-> The intercept in this case doesn't make much sense. The square footage and year both have a positive inpact on increasing the price. Everything else seems to decrease the price. Inside the group in particular, pre and other in particular
-
+> The intercept in this case doesn't make much sense. The square footage and year (bought) both have a positive inpact on increasing the price, as well as the group outside of the housing unit.
 
 10. Now, try a model with target being the log of the sale price.
 
@@ -282,6 +248,5 @@ sales_and_HUD_lmlog <- sales_and_HUD %>%
 anova(sales_and_HUD_lmlog)
 summary(sales_and_HUD_lmlog)
 ```
-
 
 11. Continue to explore the data to see if you can improve the models you have.
