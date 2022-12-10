@@ -195,7 +195,7 @@ sales_and_HUD <- sales_and_HUD %>%
     as.numeric(nearest_HUD_dist) < 804.67 &
     (YR_PIS-year(ownerdate)) %in% 2:5 ~ 'pre',
     as.numeric(nearest_HUD_dist) < 804.67 &
-    (YR_PIS-year(ownerdate)) %in% 0:2 ~ 'mid',
+    (YR_PIS-year(ownerdate)) %in% 0:1 ~ 'mid',
     as.numeric(nearest_HUD_dist) < 804.67 &
     (YR_PIS-year(ownerdate)) < 0 ~ 'post',
     as.numeric(nearest_HUD_dist) >= 804.67 &
