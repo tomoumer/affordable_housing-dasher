@@ -194,15 +194,15 @@ length(unique(sales_and_HUD$apn))
 sales_and_HUD <- sales_and_HUD %>% 
   mutate(group=case_when(
     as.numeric(nearest_HUD_dist) < 804.67 &
-    YR_PIS-year(sales_and_HUD$ownerdate) >= 2 &
-    YR_PIS-year(sales_and_HUD$ownerdate) <=5 ~ 'pre',
+    YR_PIS-year(ownerdate) >= 2 &
+    YR_PIS-year(ownerdate) <=5 ~ 'pre',
     as.numeric(nearest_HUD_dist) < 804.67 &
-    YR_PIS-year(sales_and_HUD$ownerdate) >= 0 &
-    YR_PIS-year(sales_and_HUD$ownerdate) <=2 ~ 'mid',
+    YR_PIS-year(ownerdate) >= 0 &
+    YR_PIS-year(ownerdate) <=2 ~ 'mid',
     as.numeric(nearest_HUD_dist) < 804.67 &
-    YR_PIS-year(sales_and_HUD$ownerdate) < 0 ~ 'post',
+    YR_PIS-year(ownerdate) < 0 ~ 'post',
     as.numeric(nearest_HUD_dist) >= 804.67 &
-    YR_PIS-year(sales_and_HUD$ownerdate) < 5 ~ 'outside',
+    YR_PIS-year(ownerdate) < 5 ~ 'outside',
     TRUE ~ 'other'
   ))
 
@@ -225,7 +225,19 @@ sales_and_HUD %>%
 
 7.  Create a column "Tpost" that, for homes in the "post" group gives the number of years that the sale occurred after the housing development was placed in service.
 
+```{r}
+sales_and_HUD <- sales_and_HUD %>% 
+  mutate(Tpost=if_else(group == 'post', year(ownerdate)-YR_PIS, as.numeric(NA), ) )
+```
+
+
 8.  Create a column named "age" which gives the age of the home at the time of sale.
+
+```{r}
+sales_and_HUD <- sales_and_HUD %>% 
+  mutate(age=year(ownerdate)-year_built)
+```
+
 
 9.  Filter down to only sales that took place within the five years before or after the associated development was placed in service. Then build a linear model with target variable the sales amount using the following features:
 
@@ -236,6 +248,23 @@ sales_and_HUD %>%
 -   tract
 -   How can you interpret the coefficients of this model?
 
+```{r}
+sales_and_HUD
+```
+
+
+```{r}
+sales_and_HUD_lm <- sales_and_HUD %>% 
+  filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
+  lm(amount ~ square_footage + age + group + year(ownerdate) + tract, data = .)
+
+anova(sales_and_HUD_lm)
+summary(sales_and_HUD_lm)
+```
+
+> The intercept in this case doesn't make much sense. The square footage and year both have a positive inpact on increasing the price. Everything else seems to decrease the price. Inside the group in particular, pre and other in particular
+
+
 10. Now, try a model with target being the log of the sale price.
 
 -   square_footage
@@ -244,5 +273,15 @@ sales_and_HUD %>%
 -   year
 -   tract
 -   How can you interpret the coefficients of this model?
+
+```{r}
+sales_and_HUD_lmlog <- sales_and_HUD %>% 
+  filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
+  lm(log(amount) ~ square_footage + age + group + year(ownerdate) + tract, data = .)
+
+anova(sales_and_HUD_lmlog)
+summary(sales_and_HUD_lmlog)
+```
+
 
 11. Continue to explore the data to see if you can improve the models you have.
