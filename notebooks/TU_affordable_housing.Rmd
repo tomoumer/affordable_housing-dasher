@@ -107,6 +107,8 @@ For the first part of this project, you'll mimic the methodology of the working 
 > first of all, have to filter duplicate sales by doing this, removed duplicate sales removed 7507 lines, coming to 311327 observations. Next, keep only the ones that have information in property_details (it appears all of them do). Additional note: by doing a full join and filter(is.na(amount)), found out that there are 33566 values that are present in property_details but we have no info on sales.
 
 ```{r}
+# note for regex in R, \\. matches for the symbol . instead of any character
+# sub(".*\\s([0-9]+)\\snomination.*$", "\\1", awards)
 property_sales_details <- filtered_sales %>% 
   distinct() %>% 
   inner_join(property_details, by='apn') %>% 
@@ -151,7 +153,7 @@ total_HUD_sf <- total_HUD %>%
 ```
 
 ```{r}
-sales_and_HUD <- property_sales_details_sf %>% 
+sales_and_HUD_sf <- property_sales_details_sf %>% 
   mutate(HUD_ID = total_HUD$HUD_ID[st_nearest_feature(property_sales_details_sf ,total_HUD_sf)]) %>% 
   left_join(total_HUD, by='HUD_ID')
 ```
@@ -160,7 +162,7 @@ sales_and_HUD <- property_sales_details_sf %>%
 
 ```{r}
 nearest_HUD <- total_HUD_sf[st_nearest_feature(property_sales_details_sf, total_HUD_sf), ]
-sales_and_HUD$nearest_HUD_dist <- st_distance(sales_and_HUD, nearest_HUD, by_element = T)
+sales_and_HUD_sf$nearest_HUD_dist <- st_distance(sales_and_HUD_sf, nearest_HUD, by_element = T)
 
 ```
 
@@ -189,7 +191,7 @@ sales_and_HUD$nearest_HUD_dist <- st_distance(sales_and_HUD, nearest_HUD, by_ele
 8.  Create a column named "age" which gives the age of the home at the time of sale.
 
 ```{r}
-sales_and_HUD <- sales_and_HUD %>% 
+sales_and_HUD_sf <- sales_and_HUD_sf %>% 
   filter(as.numeric(nearest_HUD_dist) <= 1609.34) %>% 
   mutate(group=case_when(
     as.numeric(nearest_HUD_dist) < 804.67 &
@@ -217,11 +219,11 @@ sales_and_HUD <- sales_and_HUD %>%
 -   How can you interpret the coefficients of this model?
 
 ```{r}
-sales_and_HUD
+sales_and_HUD_sf
 ```
 
 ```{r}
-sales_and_HUD_lm <- sales_and_HUD %>% 
+sales_and_HUD_lm <- sales_and_HUD_sf %>% 
   filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
   lm(amount ~ square_footage + age + group + year(ownerdate) + tract, data = .)
 
@@ -241,12 +243,52 @@ summary(sales_and_HUD_lm)
 -   How can you interpret the coefficients of this model?
 
 ```{r}
-sales_and_HUD_lmlog <- sales_and_HUD %>% 
+sales_and_HUD_lmlog <- sales_and_HUD_sf %>% 
   filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
   lm(log(amount) ~ square_footage + age + group + year(ownerdate) + tract, data = .)
 
 anova(sales_and_HUD_lmlog)
 summary(sales_and_HUD_lmlog)
 ```
+
+Bua worked on the following code:
+
+```{r}
+boarder_shapefile <- st_read("../data/Davidson County Border (GIS)/geo_export_b5e434a6-a620-409b-a8a2-610c823b7c51.shp", as_tibble = T, quiet = T) %>%
+  st_transform('+proj=longlat +datum=WGS84')
+
+map <- leaflet(options = leafletOptions(minZoom = 10)) %>%
+  addProviderTiles(provider = "CartoDB.Voyager") %>%
+  setView(lng = -86.7816, lat = 36.1627, zoom = 12) %>%
+  setMaxBounds(lng1 = -86.7816 + 1, 
+               lat1 = 36.1627 + 1, 
+               lng2 = -86.7816 - 1, 
+               lat2 = 36.1627 - 1) %>%
+  addCircleMarkers(data = total_HUD_sf,
+                   radius = 5,
+                   color = "white",
+                   weight = 1,
+                   fillColor = "red",
+                   fillOpacity = 0.75) %>%
+  addMarkers(data = sales_and_HUD_sf,
+                   # radius = 5,
+                   # color = "white",
+                   # weight = 1,
+                   # fillColor = "blue",
+                   # fillOpacity = 0.75,
+                   clusterOptions = markerClusterOptions()) %>%
+  addPolylines(data = boarder_shapefile)
+
+map
+```
+
+
+```{r}
+# saving the final data for the app
+st_write(sales_and_HUD_sf, '../shiny_app/sales_and_HUD_sf', driver='ESRI Shapefile')
+st_write(total_HUD_sf,'../shiny_app/total_HUD_sf', driver='ESRI Shapefile')
+
+```
+
 
 11. Continue to explore the data to see if you can improve the models you have.
