@@ -195,18 +195,21 @@ sales_and_HUD_sf <- sales_and_HUD_sf %>%
   filter(as.numeric(nearest_HUD_dist) <= 1609.34) %>% 
   mutate(group=case_when(
     as.numeric(nearest_HUD_dist) < 804.67 &
-    (YR_PIS-year(ownerdate)) %in% 2:5 ~ 'pre',
+      (YR_PIS-year(ownerdate)) %in% 2:5 ~ 'pre',
     as.numeric(nearest_HUD_dist) < 804.67 &
-    (YR_PIS-year(ownerdate)) %in% 0:1 ~ 'mid',
+      (YR_PIS-year(ownerdate)) %in% 0:1 ~ 'mid',
     as.numeric(nearest_HUD_dist) < 804.67 &
-    (YR_PIS-year(ownerdate)) < 0 ~ 'post',
+      (YR_PIS-year(ownerdate)) < 0 ~ 'post',
     as.numeric(nearest_HUD_dist) >= 804.67 &
-    (YR_PIS-year(ownerdate)) <= 5 ~ 'outside',
+      (YR_PIS-year(ownerdate)) <= 5 ~ 'outside',
     TRUE ~ 'other'
   )) %>% 
   filter(group!='other') %>% 
   mutate(Tpost=if_else(group == 'post', year(ownerdate)-YR_PIS, as.numeric(NA), ),
-         age=year(ownerdate)-year_built)
+         age=year(ownerdate)-year_built,
+         land_area=as.numeric(str_remove(land_area, ' Acres'))
+  ) %>% 
+  filter(age >= 0)
 ```
 
 9.  Filter down to only sales that took place within the five years before or after the associated development was placed in service. Then build a linear model with target variable the sales amount using the following features:
@@ -223,12 +226,13 @@ sales_and_HUD_sf
 ```
 
 ```{r}
-sales_and_HUD_lm <- sales_and_HUD_sf %>% 
-  filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
-  lm(amount ~ square_footage + age + group + year(ownerdate) + tract, data = .)
+# the log model fits better!
+#sales_and_HUD_lm <- sales_and_HUD_sf %>% 
+#  filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
+#  lm(amount ~ square_footage + age + factor(group) + year(ownerdate) + factor(tract), data = .)
 
-anova(sales_and_HUD_lm)
-summary(sales_and_HUD_lm)
+#anova(sales_and_HUD_lm)
+#summary(sales_and_HUD_lm)
 ```
 
 > The intercept in this case doesn't make much sense. The square footage and year (bought) both have a positive inpact on increasing the price, as well as the group outside of the housing unit.
@@ -243,12 +247,22 @@ summary(sales_and_HUD_lm)
 -   How can you interpret the coefficients of this model?
 
 ```{r}
+sales_and_HUD_sf %>% 
+  head()
+```
+
+
+```{r}
 sales_and_HUD_lmlog <- sales_and_HUD_sf %>% 
   filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
-  lm(log(amount) ~ square_footage + age + group + year(ownerdate) + tract, data = .)
+  lm(log(amount) ~ square_footage + age + factor(group) + year(ownerdate) + factor(tract), data = .)
 
-anova(sales_and_HUD_lmlog)
-summary(sales_and_HUD_lmlog)
+sales_and_HUD_lmlogmod <- sales_and_HUD_sf %>% 
+  filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
+  lm(log(amount) ~ square_footage + age + land_area + factor(group) + factor(building_condition) + year(ownerdate) + factor(tract), data = .)
+
+anova(sales_and_HUD_lmlog, sales_and_HUD_lmlogmod)
+summary(sales_and_HUD_lmlogmod)
 ```
 
 Bua worked on the following code:
@@ -285,8 +299,8 @@ map
 
 ```{r}
 # saving the final data for the app
-st_write(sales_and_HUD_sf, '../shiny_app/sales_and_HUD_sf', driver='ESRI Shapefile')
-st_write(total_HUD_sf,'../shiny_app/total_HUD_sf', driver='ESRI Shapefile')
+# st_write(sales_and_HUD_sf, '../shiny_app/sales_and_HUD_sf', driver='ESRI Shapefile')
+# st_write(total_HUD_sf,'../shiny_app/total_HUD_sf', driver='ESRI Shapefile')
 
 ```
 
