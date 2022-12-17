@@ -55,9 +55,6 @@ With code below, changing the filter values: - there are 2147 unique sales value
 
 -   there are 256 unique sales values that appear at least 100 times
 
-```{=html}
-<!-- -->
-```
     filtered_sales %>% 
       distinct(apn, .keep_all= TRUE) %>% 
       group_by(amount) %>% 
@@ -164,6 +161,9 @@ sales_and_HUD_sf <- property_sales_details_sf %>%
 nearest_HUD <- total_HUD_sf[st_nearest_feature(property_sales_details_sf, total_HUD_sf), ]
 sales_and_HUD_sf$nearest_HUD_dist <- st_distance(sales_and_HUD_sf, nearest_HUD, by_element = T)
 
+#this is so we can use the file in Shiny
+saveRDS(sales_and_HUD_sf, file = "../shiny_app/initial_sales_details.RDS")
+
 ```
 
 3.  Filter the homes down to those that are within one mile of an affordable housing development.
@@ -209,7 +209,7 @@ sales_and_HUD_sf <- sales_and_HUD_sf %>%
          age=year(ownerdate)-year_built,
          land_area=as.numeric(str_remove(land_area, ' Acres'))
   ) %>% 
-  filter(age >= 0)
+  filter(age >= 0 & abs(year(ownerdate)-YR_PIS) <=5)
 ```
 
 9.  Filter down to only sales that took place within the five years before or after the associated development was placed in service. Then build a linear model with target variable the sales amount using the following features:
@@ -254,11 +254,9 @@ sales_and_HUD_sf %>%
 
 ```{r}
 sales_and_HUD_lmlog <- sales_and_HUD_sf %>% 
-  filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
   lm(log(amount) ~ square_footage + age + factor(group) + year(ownerdate) + factor(tract), data = .)
 
 sales_and_HUD_lmlogmod <- sales_and_HUD_sf %>% 
-  filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
   lm(log(amount) ~ square_footage + age + land_area + factor(group) + factor(building_condition) + year(ownerdate) + factor(tract), data = .)
 
 anova(sales_and_HUD_lmlog, sales_and_HUD_lmlogmod)
@@ -299,8 +297,39 @@ map
 
 ```{r}
 # saving the final data for the app
-# st_write(sales_and_HUD_sf, '../shiny_app/sales_and_HUD_sf', driver='ESRI Shapefile')
-# st_write(total_HUD_sf,'../shiny_app/total_HUD_sf', driver='ESRI Shapefile')
+
+# this was when I was saving st objects
+# st_write(total_HUD_sf,'../shiny_app/initial_HUD_sf', driver='ESRI Shapefile')
+
+# and then this to read it in shiny:
+# initial_HUD_sf <- st_read(dsn='initial_HUD_sf', layer='initial_HUD_sf')
+
+saveRDS(total_HUD_sf, file = "../shiny_app/initial_HUD_sf.RDS")
+
+saveRDS(st_drop_geometry(sales_and_HUD_sf) %>% 
+  distinct(HUD_ID) %>% 
+  left_join(total_HUD) %>% 
+  select(HUD_ID, YR_PIS, LATITUDE, LONGITUDE) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326, agr = "constant"),
+  '../shiny_app/final_HUD_sf.RDS')
+
+saveRDS(sales_and_HUD_sf,'../shiny_app/final_sales_details_sf.RDS')
+
+
+
+```
+
+```{r}
+#sales_and_HUD_sf$age
+
+# the above is equivalent to below
+
+#sales_and_HUD_sf %>% 
+    #pull(age)
+
+st_drop_geometry(sales_and_HUD_sf) %>% 
+  distinct(apn, .keep_all = TRUE)
+
 
 ```
 

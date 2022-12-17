@@ -17,25 +17,73 @@ shinyUI(dashboardPage(
   # Sidebar with a slider input for number of bins
   dashboardSidebar(
     sidebarMenu(
-      menuItem('Map', tabName = 'map', icon = icon('map-location-dot')),
+      menuItem('Dasher', tabName = 'dasher', icon = icon('people-group'), badgeLabel = "team", badgeColor = "green"),
+      menuItem('Map', tabName = 'maps', icon = icon('map-location-dot')),
       menuItem('Data',tabName = 'data', icon = icon('database'))
-               #badgeLabel = "new", badgeColor = "green"
     )
   ),
   
   # Show a plot of the generated distribution
   dashboardBody(
     tabItems(
-      tabItem(tabName = 'map',
-              h2('Map'),
-              leafletOutput('housing_map')
+      tabItem(
+        tabName= 'dasher',
+        fluidRow(
+          h2('Team Dasher'),
+          p('Meet the team:'),
+          tags$ul(
+            tags$li('Tim Simpson'),
+            tags$li('Tomo Umer'),
+            tags$li('Thidathorn (Bua)  Vanitsthian')
+          )
+        )
       ),
+      
+      tabItem(tabName = 'maps',
+              fluidRow(
+                h2('Nearest Distance HeatMaps'),
+                column(
+                  width=6,
+                  h4('Initial HeatMap'),
+                  plotOutput('initial_dist')
+                ),
+                column(
+                  width=6,
+                  h4('Final HeatMap'),
+                  plotOutput('final_dist')
+                )
+              ),
+              fluidRow(
+                h2('Property Maps'),
+                column(
+                  width=6,
+                  h4('Initial'),
+                  leafletOutput('initial_housing_map')
+                ),
+                column(
+                  width=6,
+                  h4('Final'),
+                  leafletOutput('final_housing_map')
+                )
+              )
+      ),
+      
       tabItem(tabName = 'data',
-              h2('Data')
+              h2('DataFrame'),
+              sliderInput('age_range',
+                          label = h3('house age range'),
+                          min = final_sales_details_sf %>% 
+                            pull(age) %>% 
+                            min(),
+                          max = final_sales_details_sf %>% 
+                            pull(age) %>% 
+                            max(),
+                          value = c(10, 70)
+              ),
+              dataTableOutput('sales_table')
       )
       
     )
     
   ))
 )
-  
