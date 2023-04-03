@@ -3,25 +3,6 @@ title: "R TU Affordable Housing"
 output: html_notebook
 ---
 
-## Assessing the Impact of Affordable Housing Development
-
-In the last decade, Davidson County has experienced tremendous population growth. With this population growth has come skyrocketing housing costs. From 2010 to 2019, both home values and rents have grown by more than 150%, while wages increased only slowly. High housing costs can squeeze household budgets, reducing the money available for other daily needs, including food, clothing, health care, utilities, and transportation, as well as money needed for education or for future savings.
-
-One method of addressing rising housing costs is by building affordable housing developments. Despite the potential benefits, property owners who live near proposed housing developments often oppose such projects, citing fear that the developments will cause their property values to decline or will increase crime rates.
-
-In this project, you'll be examining the impact of housing units built in Davidson under the the Low Income Housing Tax Credit (LIHTC) or which were funded by the Barnes Housing Trust Fund (<https://www.nashville.gov/departments/mayor/housing/barnes-fund>). Established in 1986, the LIHTC program has become an integral component of federal housing policy, funding 21 percent of all multifamily developments over the period 1987-2008. The Barnes Fund, created in 2013, is Metro Nashville's first housing trust fund and was created to leverage affordable housing developments throughout Davidson County.
-
-You have been provided with several data sources. These data sources can be downloaded from here: <https://drive.google.com/drive/folders/1zWaLMIVQQuZXp4HHvtdeGpOZ5QYeWGPT?usp=share_link>
-
--   filtered_sales.csv: This dataset was obtained from the Nashville Planning Department's Parcel Viewer (<https://maps.nashville.gov/ParcelViewer/>). It contains sales of single family homes from 1995 to the present day. It has been filtered to remove sales that are likely not arms-length transactions and transactions for parcels which did not have a house on them at the time of sale. This was done by removing any transations for \$0, any transactions for which the adjacent appraisal values showed \$0 for improvents, and any for which the transaction amount was less than half of the adjacent appraisals. If you would like to work with the full dataset, all transactions are contained in full_sales.csv and the assessment values are in assessment.csv.
-
--   LIHTC.csv: Contains information on all Davidson County developments from the Department of Housing and Urban Development (HUD) National Low Income Housing Tax Credit Database. (For more information about the variables contained in this dataset, see the included data dictionary)
-
--   barnes.csv: Contains information on rental properties that are completed and have more than 10 units which were funded by the Barnes Fund.
-
--   property_details.csv: Contains detailed information on each property. Obtained from the Metro Nashville Assessor of Property's website (<https://www.padctn.org>). Includes year built, square footage, number of rooms, and location (lat/lng).
-
-For this project, we'll be focusing on single family homes and look at affordable housing developments that were placed in service in 2000 or later.
 
 ```{r message=FALSE, warning=FALSE}
 library(tidyverse)
@@ -31,6 +12,7 @@ library(sf)
 library(lubridate)
 ```
 
+
 Before delving into the project itself, I'll start with some exploratory data analysis.
 
 ```{r message=FALSE, warning=FALSE}
@@ -38,16 +20,19 @@ filtered_sales <- read_csv('../data/filtered_sales.csv')
 lihtc <- read_csv('../data/LIHTC_updated.csv')
 barnes <- read_csv('../data/barnes.csv')
 property_details <- read_csv('../data/property_details.csv')
+
+all_sale_initial_sf <- readRDS('../data/all_sale_li.rds')
+all_sale_final_sf <- readRDS('../data/nearli_sales.rds')
 ```
 
-Playing around with filtering and arranging (as well as referencing the website) I found out that: - NASHVILLE SENIOR CARE, LLC bought the most expensive property, for almost \$50 million. it's listed as "single family" which can be up to 4 units, owned or rented out, that doesn't seem to make much sense
 
-    filtered_sales %>% 
-      arrange(desc(amount))
+Playing around with filtering and arranging (as well as referencing the website) I found out that: 
+
+- NASHVILLE SENIOR CARE, LLC bought the most expensive property, for almost \$50 million.
 
 -   there are 57 distinct transactions that went for the EXACT same price, \$22058426
 
-With code below, changing the filter values: - there are 2147 unique sales values that appear at least 5 times
+With code below, changing the filter values: - there are 2147 sales values that appear at least 5 times
 
 -   there are 1248 unique sales values that appear at least 10 times
 
@@ -64,7 +49,7 @@ With code below, changing the filter values: - there are 2147 unique sales value
       geom_histogram(binwidth=10000, na.rm=TRUE) +
       xlim(0,1000000)
 
-Interesting. I didn't quite expect that many transactions to be done at the exact same value down to the single \$.
+It was concluded duplicates (same apn and date), must be errors.
 
 First sale was made 1/1/1995, last one 10/27/2022. Most distinct sales happened in 1995, gradually going down, with an especially noticeable dip during the market crash.
 
@@ -95,9 +80,6 @@ so 177 LIHTC projects, most of them placed in service in 1988 and 1989. There's 
 
 ## Part 1: Statistical Analysis
 
-For the first part of this project, you'll mimic the methodology of the working paper "Does Federally Subsidized Rental Housing Depress Neighborhood Property Values?" (<https://furmancenter.org/research/publication/does-federally-subsidized-rental-housing-depress-neighborhood-property>), building a statistical model to explore the effect on sales price of a home being within a half mile of an affordable housing development.
-
-> why 2000 ft??? in VA paper, it's 1/16 of a mile, 330 feet, paragonable to a city block; up to one mile (5280 ft)
 
 1.  Using the sf library, find the closest development to each home. Hint: You can convert a tibble to an sf object using the st_as_sf function (<https://r-spatial.github.io/sf/reference/st_as_sf.html>). See, for example, this stackoverflow post: <https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r>. Once converted, you can use the st_nearest_feature function (<https://r-spatial.github.io/sf/reference/st_nearest_feature.html>).
 
@@ -149,7 +131,11 @@ total_HUD_sf <- total_HUD %>%
   st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326, agr = "constant")
 ```
 
+
+
+
 ```{r}
+# start using the file the group agreed on
 sales_and_HUD_sf <- property_sales_details_sf %>% 
   mutate(HUD_ID = total_HUD$HUD_ID[st_nearest_feature(property_sales_details_sf ,total_HUD_sf)]) %>% 
   left_join(total_HUD, by='HUD_ID')
@@ -159,10 +145,21 @@ sales_and_HUD_sf <- property_sales_details_sf %>%
 
 ```{r}
 nearest_HUD <- total_HUD_sf[st_nearest_feature(property_sales_details_sf, total_HUD_sf), ]
-sales_and_HUD_sf$nearest_HUD_dist <- st_distance(sales_and_HUD_sf, nearest_HUD, by_element = T)
+
+#note, the dist. is in m
+sales_and_HUD_sf$nearest_HUD_dist <- as.numeric(st_distance(sales_and_HUD_sf, nearest_HUD, by_element = T))
 
 #this is so we can use the file in Shiny
-saveRDS(sales_and_HUD_sf, file = "../shiny_app/initial_sales_details.RDS")
+saveRDS(sales_and_HUD_sf, file = "../shiny_app/initial_sales_details.rds")
+
+#and this is for the color palette in shiny
+saveRDS(colorBin("Spectral",
+                 domain = sales_and_HUD_sf %>% 
+                  distinct(apn, .keep_all=TRUE) %>% 
+                  pull(nearest_HUD_dist),
+                 bins = c(0, 804.672, 1609.34, 2414.02, 3218.68, 4828.02, 6437.36, 8046.7, 9656.04, 11265.38, Inf)),
+        file = "../shiny_app/pal_initial.rds"
+)
 
 ```
 
@@ -194,13 +191,13 @@ saveRDS(sales_and_HUD_sf, file = "../shiny_app/initial_sales_details.RDS")
 sales_and_HUD_sf <- sales_and_HUD_sf %>% 
   filter(as.numeric(nearest_HUD_dist) <= 1609.34) %>% 
   mutate(group=case_when(
-    as.numeric(nearest_HUD_dist) < 804.67 &
+    nearest_HUD_dist < 804.67 &
       (YR_PIS-year(ownerdate)) %in% 2:5 ~ 'pre',
-    as.numeric(nearest_HUD_dist) < 804.67 &
+    nearest_HUD_dist < 804.67 &
       (YR_PIS-year(ownerdate)) %in% 0:1 ~ 'mid',
-    as.numeric(nearest_HUD_dist) < 804.67 &
+    nearest_HUD_dist < 804.67 &
       (YR_PIS-year(ownerdate)) < 0 ~ 'post',
-    as.numeric(nearest_HUD_dist) >= 804.67 &
+    nearest_HUD_dist >= 804.67 &
       (YR_PIS-year(ownerdate)) <= 5 ~ 'outside',
     TRUE ~ 'other'
   )) %>% 
@@ -221,9 +218,6 @@ sales_and_HUD_sf <- sales_and_HUD_sf %>%
 -   tract
 -   How can you interpret the coefficients of this model?
 
-```{r}
-sales_and_HUD_sf
-```
 
 ```{r}
 # the log model fits better!
@@ -268,30 +262,46 @@ Bua worked on the following code:
 ```{r}
 boarder_shapefile <- st_read("../data/Davidson County Border (GIS)/geo_export_b5e434a6-a620-409b-a8a2-610c823b7c51.shp", as_tibble = T, quiet = T) %>%
   st_transform('+proj=longlat +datum=WGS84')
+```
 
-map <- leaflet(options = leafletOptions(minZoom = 10)) %>%
+```{r}
+
+bins <- c(0, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, Inf)
+pal <- colorBin("Spectral", domain = all_sale_initial_sf %>% 
+  distinct(apn, .keep_all=TRUE) %>% 
+  pull(dist), bins = bins)
+
+map <- leaflet(options = leafletOptions(minZoom = 10, preferCanvas = TRUE)) %>%
   addProviderTiles(provider = "CartoDB.Voyager") %>%
-  setView(lng = -86.7816, lat = 36.1627, zoom = 12) %>%
+  setView(lng = -86.7816, lat = 36.1627, zoom = 10) %>%
   setMaxBounds(lng1 = -86.7816 + 1, 
                lat1 = 36.1627 + 1, 
                lng2 = -86.7816 - 1, 
                lat2 = 36.1627 - 1) %>%
-  addCircleMarkers(data = total_HUD_sf,
-                   radius = 5,
-                   color = "white",
+  addCircleMarkers(data = all_sale_initial_sf %>%
+                     distinct(apn, .keep_all=TRUE),
+                   radius = 1.5,
+                   color = ~pal(dist),
                    weight = 1,
-                   fillColor = "red",
+                   fillColor = ~pal(dist),
+                   fillOpacity = 0.75,
+  ) %>%
+  addCircleMarkers(data = total_HUD_sf,
+                   radius = 2.5,
+                   color = "black",
+                   weight = 2,
+                   fillColor = "gray",
                    fillOpacity = 0.75) %>%
-  addMarkers(data = sales_and_HUD_sf,
-                   # radius = 5,
-                   # color = "white",
-                   # weight = 1,
-                   # fillColor = "blue",
-                   # fillOpacity = 0.75,
-                   clusterOptions = markerClusterOptions()) %>%
-  addPolylines(data = boarder_shapefile)
+  addPolylines(data = boarder_shapefile) 
 
 map
+
+
+
+#  addMarkers(data = sales_and_HUD_sf,
+#                   clusterOptions = markerClusterOptions()
+#             ) %>%
+
 ```
 
 
@@ -304,33 +314,44 @@ map
 # and then this to read it in shiny:
 # initial_HUD_sf <- st_read(dsn='initial_HUD_sf', layer='initial_HUD_sf')
 
-saveRDS(total_HUD_sf, file = "../shiny_app/initial_HUD_sf.RDS")
+saveRDS(total_HUD_sf, file = "../shiny_app/initial_HUD_sf.rds")
 
 saveRDS(st_drop_geometry(sales_and_HUD_sf) %>% 
   distinct(HUD_ID) %>% 
   left_join(total_HUD) %>% 
   select(HUD_ID, YR_PIS, LATITUDE, LONGITUDE) %>% 
   st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326, agr = "constant"),
-  '../shiny_app/final_HUD_sf.RDS')
+  '../shiny_app/final_HUD_sf.rds')
 
-saveRDS(sales_and_HUD_sf,'../shiny_app/final_sales_details_sf.RDS')
+saveRDS(sales_and_HUD_sf,'../shiny_app/final_sales_details_sf.rds')
 
 
 
 ```
 
+
 ```{r}
-#sales_and_HUD_sf$age
+county.lines <- subset(map_data('county'),region=='tennessee' & subregion=='davidson')
 
-# the above is equivalent to below
+gplot <- ggplot(all_sale_initial_sf)+
+      geom_sf(aes(colour=dist))+
+      geom_sf(data = total_HUD_sf, shape=23) +
+      geom_path(data = county.lines, mapping=aes(x=long, y=lat, group=group)) +
+      scale_colour_gradientn(colours=rainbow(100)[75:1])+
+      labs(colour='Distance')
 
-#sales_and_HUD_sf %>% 
-    #pull(age)
+ggsave('initial_heatmap.png', plot=gplot)
+```
 
-st_drop_geometry(sales_and_HUD_sf) %>% 
-  distinct(apn, .keep_all = TRUE)
+```{r}
+gplot2 <- ggplot(all_sale_final_sf)+
+  geom_sf(aes(colour=dist))+
+  geom_sf(data = total_HUD_sf, shape=23) +
+  geom_path(data = county.lines, mapping=aes(x=long, y=lat, group=group)) +
+  scale_colour_gradientn(colours=rainbow(100)[75:1])+
+  labs(colour='Distance')
 
-
+ggsave('final_heatmap.png', plot=gplot2)
 ```
 
 
