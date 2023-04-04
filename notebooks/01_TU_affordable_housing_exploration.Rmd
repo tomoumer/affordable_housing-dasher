@@ -1,0 +1,366 @@
+---
+title: "R TU Affordable Housing"
+output: html_notebook
+---
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(httr)
+library(leaflet)
+library(sf)
+library(lubridate)
+```
+
+Reading in the initial files.
+
+```{r message=FALSE, warning=FALSE}
+filtered_sales <- read_csv('../data/filtered_sales.csv')
+lihtc <- read_csv('../data/LIHTC_updated.csv')
+barnes <- read_csv('../data/barnes.csv')
+property_details <- read_csv('../data/property_details.csv')
+```
+
+## Data Exploration
+
+Looking at the data set "filtered_sales" there are some outliers and irregularities, also checked some individual ones on [Parcel Viewer](https://maps.nashville.gov/ParcelViewer/);
+
+-   NASHVILLE SENIOR CARE, LLC bought the most expensive property, for almost \$50 million.
+
+-   there are 57 distinct transactions that went for the exact same price (duplicates), \$22058426
+
+```{r}
+filtered_sales %>% 
+  distinct(apn, .keep_all= TRUE) %>%
+  group_by(amount) %>%
+  count() %>%
+  filter(n >= 100) %>%
+  ggplot(aes(x=amount)) + geom_histogram(binwidth=10000, na.rm=TRUE) + xlim(0,1000000)
+```
+
+
+With code above, changing the filter values to check for duplicates - there are 2147 sales values that appear at least 5 times
+
+-   there are 1248 unique sales values that appear at least 10 times
+
+-   there are 661 unique sales values that appear at least 30 times
+
+-   there are 256 unique sales values that appear at least 100 times
+
+It was concluded duplicates (same apn and date), must be errors.
+
+
+```{r}
+filtered_sales %>% 
+  distinct(apn, .keep_all= TRUE) %>% 
+  mutate(owneryear=format(ownerdate,'%Y')) %>% 
+  group_by(owneryear) %>% 
+  count() %>% 
+  ggplot(aes(y=owneryear, weight=n)) +
+  geom_bar()
+
+filtered_sales %>% 
+  #distinct(apn, .keep_all= TRUE) %>% 
+  mutate(owneryear=format(ownerdate,'%Y')) %>% 
+  group_by(owneryear) %>% 
+  summarize(max_price = max(amount), min_price = min(amount)) %>% 
+  mutate(price_diff = max_price - min_price) %>% 
+  arrange(desc(price_diff))
+```
+
+First sale was made 1/1/1995, last one 10/27/2022. Most distinct sales happened in 1995, gradually going down, with an especially noticeable dip during the market crash.
+
+Biggest price difference (between min and max sale) was in 2018, no surprise there. However, it's interesting that the fourth biggest sale was in 2006.
+
+
+```{r}
+lihtc %>% 
+  filter(YR_PIS >= 2000) %>% 
+  group_by(YR_PIS) %>% 
+  count()
+```
+
+
+so 177 LIHTC projects, most of them placed in service in 1988 and 1989. There's 56 that were placed in service after (including) year 2000, not including the 2 placed in service unknown when and the 3 unconfirmed.
+
+## Part 1: Statistical Analysis
+
+1.  Using the sf library, find the closest development to each home. Hint: You can convert a tibble to an sf object using the st_as_sf function
+
+First of all, we have to filter duplicate sales as observed above - removed 7507 lines, coming to 311339 observations. Next, keep only the ones that have information in property_details (it appears all of them do).
+
+> NOTE: by doing a full join instead and filter(is.na(amount)), found out that there are 33566 values that are present in property_details but we have no info on sales.
+
+> Personal note: for regex in R, \\. matches for the symbol . (instead of any character)
+
+```{r}
+property_sales <- filtered_sales %>% 
+  distinct() %>% 
+  inner_join(property_details, by='apn') %>% 
+  mutate(
+    longitude=str_extract(centroid, '-\\d*.\\d*'),
+    latitude=str_remove(str_extract(centroid, ',\\d*.\\d*'),',')
+  ) 
+
+```
+
+Since we only want affordable housing since year 2000, filter out the dataset, going from 177 rows down to 57; but then we can add the barnes dataset to it, remove all not relevant columns for our analysis. Once that is done, there is a total of 66 rows left in the "total_HUD".
+
+```{r}
+# just adding the HUD_ID which was missing from barnes and our team Dasher found
+barnes <- barnes %>% 
+  mutate(HUD_ID=c('TNA081023A00400CO',
+                  'TNA09211010400',
+                  'TNA081023A90000CO',
+                  'TNA08600035500',
+                  'TNA10613000800',
+                  'TNA05108017800',
+                  'TNA09311022700',
+                  'TNA06912006600',
+                  'TNA10601016800'),
+         .before = 'Barnes Year') %>% 
+  select(HUD_ID, YR_PIS='Barnes Year', LATITUDE= lat, LONGITUDE=lng)
+
+lihtc <- lihtc %>% 
+  filter(YR_PIS >= 2000 & !YR_PIS %in% c(8888, 9999)) %>% 
+  select(HUD_ID, YR_PIS, LATITUDE, LONGITUDE)
+
+total_HUD <- bind_rows(lihtc,barnes)
+```
+
+Now transforming the data to sf objects in order to calculate nearest distance.
+
+```{r}
+property_sales_sf <- property_sales %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, agr = "constant")
+
+total_HUD_sf <- total_HUD %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326, agr = "constant")
+```
+
+```{r}
+# start using the file the group agreed on
+sales_and_HUD_sf <- property_sales_sf %>% 
+  mutate(HUD_ID = total_HUD$HUD_ID[st_nearest_feature(property_sales_sf ,total_HUD_sf)]) %>% 
+  left_join(total_HUD, by='HUD_ID')
+```
+
+2.  Calculate the distance from each home its closest development.
+
+```{r}
+nearest_HUD <- total_HUD_sf[st_nearest_feature(property_sales_sf, total_HUD_sf), ]
+
+#the dist. is in m
+sales_and_HUD_sf$nearest_HUD_dist <- as.numeric(st_distance(sales_and_HUD_sf, nearest_HUD, by_element = T)) / 1609.34
+
+#this is so we can use the file in the Shiny app
+saveRDS(sales_and_HUD_sf, file = "../shiny_app/initial_sales_details.rds")
+
+#and this is for the color palette in shiny
+saveRDS(colorBin("Spectral",
+                 domain = sales_and_HUD_sf %>% 
+                  distinct(apn, .keep_all=TRUE) %>% 
+                  pull(nearest_HUD_dist),
+                 bins = c(0, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, Inf)),
+        file = "../shiny_app/pal_initial.rds"
+)
+
+```
+
+3.  Filter the homes down to those that are within one mile of an affordable housing development.
+
+4.  For each remaining home, calculate a new column called "group", which is defined according to the following rules. Hint: Use the case_when function to do this.
+
+-   "pre" - for homes where the distance is less than half a mile and whose sale date was 2-5 years prior to the input year
+-   "mid" - for homes where the distance is less than half a mile and whose sale date was 0-2 years prior to the input year
+-   "post" - for homes where the distance is less than half a mile and whose sale date was after the input year
+-   "outside" - for homes where the distance is more than half a mile and whose sale date was no more than 5 years prior to the input year
+-   "other" - All other rows
+
+> note: 1 mile = 1609.34 m - this filters it down to 112,085 values
+
+5.  Filter out all rows whose group is "other".
+
+> down to 72,494 rows
+
+6.  Add an id column containing the id value for the development.
+
+> already done that with the modifications I had to do earlier, the HUD_ID
+
+7.  Create a column "Tpost" that, for homes in the "post" group gives the number of years that the sale occurred after the housing development was placed in service.
+
+8.  Create a column named "age" which gives the age of the home at the time of sale.
+
+```{r}
+sales_and_HUD_filtered_sf <- sales_and_HUD_sf %>% 
+  filter(as.numeric(nearest_HUD_dist) <= 1) %>% 
+  mutate(group=case_when(
+    nearest_HUD_dist < 0.5 &
+      (YR_PIS-year(ownerdate)) %in% 2:5 ~ 'pre',
+    nearest_HUD_dist < 0.5 &
+      (YR_PIS-year(ownerdate)) %in% 0:1 ~ 'mid',
+    nearest_HUD_dist < 0.5 &
+      (YR_PIS-year(ownerdate)) < 0 ~ 'post',
+    nearest_HUD_dist >= 0.5 &
+      (YR_PIS-year(ownerdate)) <= 5 ~ 'outside',
+    TRUE ~ 'other'
+  )) %>% 
+  filter(group!='other') %>% 
+  mutate(Tpost=if_else(group == 'post', year(ownerdate)-YR_PIS, as.numeric(NA), ),
+         age=year(ownerdate)-year_built,
+         land_area=as.numeric(str_remove(land_area, ' Acres'))
+  ) %>% 
+  filter(age >= 0 & abs(year(ownerdate)-YR_PIS) <=5)
+```
+
+9.  Filter down to only sales that took place within the five years before or after the associated development was placed in service. Then build a linear model with target variable the sales amount using the following features:
+
+-   square_footage
+-   age of home at time of sale
+-   group
+-   year
+-   tract
+-   How can you interpret the coefficients of this model?
+
+```{r}
+# the log model fits better!
+#sales_and_HUD_lm <- sales_and_HUD_sf %>% 
+#  filter(abs(year(ownerdate)-YR_PIS) <=5) %>% 
+#  lm(amount ~ square_footage + age + factor(group) + year(ownerdate) + factor(tract), data = .)
+
+#anova(sales_and_HUD_lm)
+#summary(sales_and_HUD_lm)
+```
+
+> The intercept in this case doesn't make much sense. The square footage and year (bought) both have a positive inpact on increasing the price, as well as the group outside of the housing unit.
+
+10. Now, try a model with target being the log of the sale price.
+
+-   square_footage
+-   age of home at time of sale
+-   group
+-   year
+-   tract
+-   How can you interpret the coefficients of this model?
+
+```{r}
+sales_and_HUD_filtered_sf %>% 
+  head()
+```
+
+```{r}
+sales_and_HUD_lmlog <- sales_and_HUD_filtered_sf %>% 
+  lm(log(amount) ~ square_footage + age + factor(group) + year(ownerdate) + factor(tract), data = .)
+
+sales_and_HUD_lmlogmod <- sales_and_HUD_filtered_sf %>% 
+  lm(log(amount) ~ square_footage + age + land_area + factor(group) + factor(building_condition) + year(ownerdate) + factor(tract), data = .)
+
+anova(sales_and_HUD_lmlog, sales_and_HUD_lmlogmod)
+summary(sales_and_HUD_lmlogmod)
+```
+
+Bua worked on the following code:
+
+```{r}
+boarder_shapefile <- st_read("../data/Davidson County Border (GIS)/geo_export_b5e434a6-a620-409b-a8a2-610c823b7c51.shp", as_tibble = T, quiet = T) %>%
+  st_transform('+proj=longlat +datum=WGS84')
+```
+
+```{r}
+sales_and_HUD_sf %>% 
+  head()
+```
+
+
+```{r}
+
+bins <- c(0, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, Inf)
+pal <- colorBin("Spectral", domain = sales_and_HUD_sf %>% 
+  distinct(apn, .keep_all=TRUE) %>% 
+  pull(nearest_HUD_dist), bins = bins)
+
+map <- leaflet(options = leafletOptions(minZoom = 10, preferCanvas = TRUE)) %>%
+  addProviderTiles(provider = "CartoDB.Voyager") %>%
+  setView(lng = -86.7816, lat = 36.1627, zoom = 10) %>%
+  setMaxBounds(lng1 = -86.7816 + 1, 
+               lat1 = 36.1627 + 1, 
+               lng2 = -86.7816 - 1, 
+               lat2 = 36.1627 - 1) %>%
+  addCircleMarkers(data = sales_and_HUD_sf %>%
+                     distinct(apn, .keep_all=TRUE),
+                   radius = 1.5,
+                   color = ~pal(nearest_HUD_dist),
+                   weight = 1,
+                   fillColor = ~pal(nearest_HUD_dist),
+                   fillOpacity = 0.75,
+  ) %>%
+  addCircleMarkers(data = total_HUD_sf,
+                   radius = 2.5,
+                   color = "black",
+                   weight = 2,
+                   fillColor = "gray",
+                   fillOpacity = 0.75) %>%
+  addPolylines(data = boarder_shapefile) 
+
+map
+
+
+
+#  addMarkers(data = sales_and_HUD_sf,
+#                   clusterOptions = markerClusterOptions()
+#             ) %>%
+
+```
+
+```{r}
+# saving the final data for the app
+
+# this was when I was saving st objects
+# st_write(total_HUD_sf,'../shiny_app/initial_HUD_sf', driver='ESRI Shapefile')
+
+# and then this to read it in shiny:
+# initial_HUD_sf <- st_read(dsn='initial_HUD_sf', layer='initial_HUD_sf')
+
+saveRDS(total_HUD_sf, file = "../shiny_app/initial_HUD_sf.rds")
+
+saveRDS(st_drop_geometry(sales_and_HUD_sf) %>% 
+  distinct(HUD_ID) %>% 
+  left_join(total_HUD) %>% 
+  select(HUD_ID, YR_PIS, LATITUDE, LONGITUDE) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326, agr = "constant"),
+  '../shiny_app/final_HUD_sf.rds')
+
+saveRDS(sales_and_HUD_filtered_sf,'../shiny_app/final_sales_details_sf.rds')
+
+
+
+```
+```{r}
+sales_and_HUD_sf %>% 
+  head()
+```
+
+```{r}
+county.lines <- subset(map_data('county'),region=='tennessee' & subregion=='davidson')
+
+gplot <- ggplot(sales_and_HUD_sf)+
+      geom_sf(aes(colour=nearest_HUD_dist))+
+      geom_sf(data = total_HUD_sf, shape=23) +
+      geom_path(data = county.lines, mapping=aes(x=long, y=lat, group=group)) +
+      scale_colour_gradientn(colours=rainbow(100)[75:1])+
+      labs(colour='Distance')
+
+ggsave('initial_heatmap.png', plot=gplot)
+```
+
+```{r}
+gplot2 <- ggplot(sales_and_HUD_filtered_sf)+
+  geom_sf(aes(colour=nearest_HUD_dist))+
+  geom_sf(data = total_HUD_sf, shape=23) +
+  geom_path(data = county.lines, mapping=aes(x=long, y=lat, group=group)) +
+  scale_colour_gradientn(colours=rainbow(100)[75:1])+
+  labs(colour='Distance')
+
+ggsave('final_heatmap.png', plot=gplot2)
+```
+
+11. Continue to explore the data to see if you can improve the models you have.

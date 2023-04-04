@@ -1,0 +1,276 @@
+---
+title: "Affordable Housing Model"
+output: html_notebook
+---
+
+# Linear Regression Affordable Hosuing Models
+
+After the initial exploration and talking with other groups, the DS6 class had a discussion and we each worked on various aspects. Our instructor then helped us showcase how to work on improving the models. This notebook is a slightly adapted version of that, using the data from the Dasher team.
+
+```{r}
+library(tidyverse)
+library(sf)
+library(lubridate)
+```
+
+```{r}
+homes <- read_rds('../data/initial_sales_details.rds')
+property_details <- read_csv('../data/propzip.csv')
+```
+> note: the reason I'm starting with the initial filtering is because while working in group, we filtered out certain developments based on the suggested cuts (i.e. distance in miles form the nearest dev. and time). Since here we considered more expansive models, decided to keep those.
+
+> second note: just like with the exploration though, have to remove houses where the alleged age (year sold - year built) is negative, leaving us with 193630 sales
+
+```{r}
+# to extract the sale year and to use the variable names as were chosen as the DS6 group as a whole
+homes <- homes %>% 
+  mutate(sale_yr = year(ownerdate),
+         dist = nearest_HUD_dist,
+         li_start_yr = YR_PIS) %>% 
+  mutate(Tpost = sale_yr - li_start_yr, age = sale_yr - year_built) %>% 
+  filter(age >= 0)
+```
+
+
+Add in zipcodes info as a way to estimate differences for different parts of the county without looking at too small of a region
+```{r}
+homes <- homes %>% 
+  inner_join(
+    property_details %>% 
+      select(apn, propzip)
+             )
+```
+
+To get started, what happens if we just predict log price based on year?
+```{r}
+lm_basic <- lm(data = homes,
+              formula = 'log(amount) ~ sale_yr')
+
+summary(lm_basic)
+```
+
+What is the estimate of the overall growth per year?
+```{r}
+exp(coefficients(lm_basic)['sale_yr'])
+```
+About 5% growth per year (over the range of years).
+
+```{r}
+homes %>% 
+  ggplot(aes(x = sale_yr, y = log(amount))) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(method = 'lm')
+```
+Another option - treat year as a dummy variable (category instead of number)
+```{r}
+lm_basic <- lm(data = homes,
+              formula = 'log(amount) ~ as.factor(sale_yr)')
+
+summary(lm_basic)
+```
+The breakdown above shows how the coefficients drop down in the 2008 and then pick back up (see also plot below). We're able to afford adding that flexibility (with year) because we have thousands of observations for each year.
+
+```{r}
+tibble(sale_yr = 1995:2022) %>% 
+  mutate(fitted = exp(predict(lm_basic, newdata = .))) %>% 
+  ggplot(aes(x = sale_yr, y = fitted)) +
+  geom_line()
+```
+Looking at the table below, due to the log, the predicted values are going to be closer to medians (log dampens the effect of outliers). Also, the slow growth in the beginning makes the basic model poorly predict the fast growth towards the end of the dataset in recent years.
+
+```{r}
+homes %>% 
+  st_drop_geometry() %>% 
+  group_by(sale_yr) %>% 
+  summarize(mean_sale_amount = mean(amount),
+            median_sale_amount = median(amount)) %>% 
+  inner_join(tibble(sale_yr = 1995:2022) %>% 
+  mutate(fitted = exp(predict(lm_basic, newdata = .))))
+```
+
+
+```{r}
+# How far out do we want to divide?
+max_dist = 1
+# What should the width of each ring be?
+by = 0.5
+
+breaks = c(seq(from = 0, to = max_dist, by = by), Inf)
+
+homes <- homes %>%
+  mutate(dist_group = cut(dist, breaks = breaks)) %>% 
+  mutate(time = case_when(
+      li_start_yr - sale_yr >= 2 ~ 'pre',
+      li_start_yr - sale_yr >= 0 ~ 'mid',
+      TRUE ~ 'post'
+    )
+  ) %>%
+  unite(dist_group, time, col = 'group')
+
+# What do we want to define as the "outside" group?
+outside_dist <- 0.5
+
+lm_log <- lm(data = homes %>% 
+               mutate(group = if_else(
+                 dist < outside_dist, group, "outside"
+               )) %>% 
+               filter(dist <= max_dist) %>%
+               filter(Tpost >= -5 & Tpost <= 5) %>% 
+               mutate(quarter = paste(quarter(ownerdate) %>% as.character,
+                      sale_yr, sep = '-')) %>% 
+               filter(amount > 0, square_footage > 0), 
+              formula = 'log(amount) ~ log(square_footage) + age + relevel(factor(group), ref = "outside") + quarter + factor(propzip)')
+
+#summary(lm_log)
+```
+
+Comparing before to outside.
+```{r}
+
+inner_ring = 0
+
+point_est = lm_log$coefficients[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_pre')]
+std_err = sqrt(vcov(lm_log)[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_pre'), paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_pre')])
+
+print('Point Estimate:')
+exp(point_est)
+print('Lower Bound:')
+exp(point_est - 1.96 * std_err)
+print('Upper Bound:')
+exp(point_est + 1.96 * std_err)
+```
+
+
+```{r}
+print('Pre:')
+exp(
+      lm_log$coefficients[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_pre')]
+    )
+
+print('Post:')
+exp(
+  lm_log$coefficients[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_post')]
+    )
+```
+
+```{r}
+# Difference between counterfactual and actual
+point_est =
+  lm_log$coefficients[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_post')] - 
+  lm_log$coefficients[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_pre')]
+
+std_error = sqrt(
+  vcov(lm_log)[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_post'), paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_post')] +
+  vcov(lm_log)[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_pre'), paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_pre')] +
+    2*vcov(lm_log)[paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_post'), paste0('relevel(factor(group), ref = "outside")(',inner_ring,',',inner_ring + by,']_pre')]
+    )
+
+lb = point_est - 1.96*std_error
+ub = point_est + 1.96*std_error
+
+print('Point Estimate:')
+exp(point_est)
+print('Lower Bound:')
+exp(point_est - 1.96 * std_err)
+print('Upper Bound:')
+exp(point_est + 1.96 * std_err)
+```
+
+# Full Difference in Differences
+```{r}
+max_dist = 1
+by = 0.5
+
+breaks = c(seq(from = 0, to = max_dist, by = by), Inf)
+
+homes <- homes %>%
+  mutate(dist_group = cut(dist, breaks = breaks)) %>% 
+  mutate(time = case_when(
+      li_start_yr - sale_yr >= 2 ~ 'pre',
+      li_start_yr - sale_yr >= 0 ~ 'mid',
+      TRUE ~ 'post'
+    )
+  ) %>%
+  unite(dist_group, time, col = 'group')
+
+outside_dist <- 0.5
+
+lm_log <- lm(data = homes %>% 
+               mutate(group = case_when(
+                 dist < outside_dist ~ group,
+                 Tpost <= -2 ~ 'outside_pre',
+                 Tpost >= 0 ~ 'outside_post',
+                 T ~ 'outside_mid'
+               )) %>% 
+               filter(dist <= max_dist) %>% 
+               filter(Tpost >= -5 & Tpost <= 5) %>% 
+               mutate(quarter = paste(lubridate::quarter(ownerdate) %>% as.character,
+                      sale_yr, sep = '-')) %>% 
+               filter(amount > 0, square_footage > 0), 
+              formula = 'log(amount) ~ log(square_footage) + age + relevel(factor(group), ref = "outside_pre") + quarter + factor(propzip)')
+
+#summary(lm_log)
+```
+
+```{r}
+#Comparing Before to outside group
+
+inner_ring = 0
+
+point_est = lm_log$coefficients[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_pre')]
+std_err = sqrt(vcov(lm_log)[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_pre'), paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_pre')])
+
+print('Point Estimate:')
+exp(point_est)
+print('Lower Bound:')
+exp(point_est - 1.96 * std_err)
+print('Upper Bound:')
+exp(point_est + 1.96 * std_err)
+```
+
+```{r}
+#Comparing after to outside group after
+
+point_est = lm_log$coefficients[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post')] - lm_log$coefficients['relevel(factor(group), ref = "outside_pre")outside_post']
+std_err = sqrt(
+  vcov(lm_log)[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post'), paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post')] +
+    vcov(lm_log)['relevel(factor(group), ref = "outside_pre")outside_post', 'relevel(factor(group), ref = "outside_pre")outside_post'] +
+    2*vcov(lm_log)[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post'), 'relevel(factor(group), ref = "outside_pre")outside_post']
+    )
+
+print('Point Estimate:')
+exp(point_est)
+print('Lower Bound:')
+exp(point_est - 1.96 * std_err)
+print('Upper Bound:')
+exp(point_est + 1.96 * std_err)
+```
+
+
+```{r}
+# Difference between counterfactual and actual
+point_est =
+  lm_log$coefficients[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post')] - 
+  (lm_log$coefficients[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_pre')] +
+  lm_log$coefficients['relevel(factor(group), ref = "outside_pre")outside_post'])
+
+std_error = sqrt(
+  vcov(lm_log)[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post'), paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post')] +
+  vcov(lm_log)[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_pre'), paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_pre')] +
+    vcov(lm_log)['relevel(factor(group), ref = "outside_pre")outside_post', 'relevel(factor(group), ref = "outside_pre")outside_post'] +
+    2*vcov(lm_log)[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post'), 'relevel(factor(group), ref = "outside_pre")outside_post'] +
+    2*vcov(lm_log)[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post'), paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_pre')] +
+    2*vcov(lm_log)[paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_pre'), paste0('relevel(factor(group), ref = "outside_pre")(',inner_ring,',',inner_ring + by,']_post')]
+    )
+
+lb = point_est - 1.96*std_error
+ub = point_est + 1.96*std_error
+
+print('Point Estimate:')
+exp(point_est)
+print('Lower Bound:')
+exp(point_est - 1.96 * std_err)
+print('Upper Bound:')
+exp(point_est + 1.96 * std_err)
+```
+
