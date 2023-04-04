@@ -1,3 +1,7 @@
+# Team DS 6 project - with team Dasher
+
+This project was a collaboration between [Bua Matthews](https://github.com/bvanitsthian), [Tim Simpson](https://github.com/tjsimpson524) and myself. We each worked on our individual branches and discussed what we were working on, exchanging feedback. We decided first as a group what kind of cuts to make and decisions on data and then finally the different teams came together and wrapped the group project as a collaborative effort between the DS6 students and our instructor Michael.
+
 # Assessing the Impact of Affordable Housing Development
 
 In the last decade, Davidson County has experienced tremendous population growth. With this population growth has come skyrocketing housing costs. From 2010 to 2019, both home values and rents have grown by more than 150%, while wages increased only slowly. High housing costs can squeeze household budgets, reducing the money available for other daily needs, including food, clothing, health care, utilities, and transportation, as well as money needed for education or for future savings.
